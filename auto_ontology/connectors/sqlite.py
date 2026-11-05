@@ -131,8 +131,12 @@ class SQLiteDatabase(SQLDatabase):
         if cur.description is None:
             return pd.DataFrame()
         rows = cur.fetchall()
+        # Tuple rows, not dict rows: dict(row) collapses duplicate column
+        # names (e.g. SELECT c.id, o.id, ...), silently replacing the first
+        # value with the second. Tuple rows keep every value in order, and
+        # the columns list (which may itself repeat names) stays aligned.
         return pd.DataFrame(
-            [dict(row) for row in rows], columns=[col[0] for col in cur.description]
+            [tuple(row) for row in rows], columns=[col[0] for col in cur.description]
         )
 
     def get_tables(self) -> pd.DataFrame:
