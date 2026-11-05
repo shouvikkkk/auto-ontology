@@ -90,9 +90,32 @@ def test_execute_returns_dataframe_and_closes_connection(
 
     assert result.to_dict(orient="records") == [{"value": 1}]
     assert connections[1].connect_kwargs["database"] == "beaver"
-    assert connections[1].cursor_instance.executed == ("SELECT %s AS value", [1])
+    assert connections[1].cursoreinstance.executed == ("SELECT %s AS value", [1])
     assert connections[1].closed
 
+
+def test_execute_preserves_duplicate_column_values(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Duplicate result column names must not collapse values (issue #408).
+
+A join like SELECT c.id, o.id, ... used to return the second column's
+value in both positions on MySQL because the cursor ran in dict mode.
+"""
+
+def connect(**_kwargs: Any) -> "_DuplicateColumnConnection":
+    return _DuplicateColumnConnection()
+
+monkeypatch.setattr(
+    "auto_ontology.connectors.mysql.mysql.connector.connect", connect
+)
+database = MySQLDatabase(_connection_string())
+result = database.execute(
+    "SELECT c.id, o.id, c.name, o.name "
+    "FROM customers c JOIN orders o ON o.customer_id = c.id"
+    )
+assert list(result.columns) == ["id", "id", "name", "name"]
+assert result.values.tolist() == [[1, 100, "Ada", "first order"]]
 
 def _live_connection() -> dict[str, Any]:
     # Opt in explicitly so pytest never dials a real server just because MYSQL_*
@@ -182,8 +205,8 @@ class Cursor:
     def execute(self, statement: str, parameters: list[int] | None = None) -> None:
         self.executed = (statement, parameters)
 
-    def fetchall(self) -> list[dict[str, int]]:
-        return [{"value": 1}]
+    def fetchall(self) -> list[tuple[int, ...]]:
+        return [(1,)]
 
     def close(self) -> None:
         self.closed = True
@@ -196,8 +219,7 @@ class Connection:
         self.pinged = False
         self.closed = False
 
-    def cursor(self, *, dictionary: bool = False) -> Cursor:
-        assert dictionary
+    def cursor(self) -> Cursor:
         return self.cursor_instance
 
     def ping(self, *, reconnect: bool = False) -> None:
@@ -206,3 +228,27 @@ class Connection:
 
     def close(self) -> None:
         self.closed = True
+
+class _DuplicateColumnCursor:
+    description = [("id",), ("id",), ("name",), ("name",)]
+    executed: tuple[str, list[int] | None] | None = None
+
+def execute(self, statement: str, parameters: list[int] | None = None) -> None:
+    self.executed = (statement, parameters)
+
+def fetchall(self) -> list[tuple[int | str, ...]]:
+    return [(1, 100, "Ada", "first order")]
+
+def close(self) -> None:
+    pass
+
+class _DuplicateColumnConnection:
+    def cursor(self) -> _DuplicateColumnCursor:
+        return _DuplicateColumnCursor()
+
+def ping(self, *, reconnect: bool = False) -> None:
+    pass
+
+def close(self) -> None:
+    pass
+    
